@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""
+PROFITABLE FINAL STRATEGY - Optimized for Win Rate
+"""
+
+import pandas as pd
+import numpy as np
+from data_manager import DataManager
+from ta import trend, momentum, volatility, volume
+
+class ProfitableIndicatorEngine:
+    def __init__(self):
+        self.features = []
+    
+    def calculate_trendline_features(self, df):
+        """Optimized for profitable setups"""
+        df['distance_to_trendline'] = 1.0
+        df['trendline_touch'] = 0
+        df['trendline_slope'] = 0.0
+        df['rejection_strength'] = 0.0
+        
+        print("🔍 Finding profitable trendline setups...")
+        setups_found = 0
+        
+        for i in range(30, len(df)):
+            current_high = df['high'].iloc[i]
+            current_low = df['low'].iloc[i]
+            current_close = df['close'].iloc[i]
+            current_open = df['open'].iloc[i]
+            
+            # Use multiple timeframes for better levels
+            resistance_20 = df['high'].iloc[i-20:i].max()
+            resistance_50 = df['high'].iloc[i-50:i].max() if i >= 50 else resistance_20
+            support_20 = df['low'].iloc[i-20:i].min()
+            support_50 = df['low'].iloc[i-50:i].min() if i >= 50 else support_20
+            
+            # Use the most significant level
+            resistance = max(resistance_20, resistance_50)
+            support = min(support_20, support_50)
+            
+            dist_to_resistance = abs(current_high - resistance) / resistance
+            dist_to_support = abs(current_low - support) / support
+            
+            min_distance = min(dist_to_resistance, dist_to_support)
+            
+            # Determine direction based on which is closer AND price position
+            if dist_to_resistance < dist_to_support and current_close < resistance:
+                trend_direction = -1  # Near resistance and below it
+            elif dist_to_support < dist_to_resistance and current_close > support:
+                trend_direction = 1   # Near support and above it
+            else:
+                trend_direction = 0   # Not clear
+            
+            df.loc[df.index[i], 'distance_to_trendline'] = min_distance
+            df.loc[df.index[i], 'trendline_slope'] = trend_direction
+            
+            # PROFITABLE PARAMETERS: 0.3% distance + trend direction must be clear
+            if min_distance < 0.003 and trend_direction != 0:
+                df.loc[df.index[i], 'trendline_touch'] = 1
+                
+                # Calculate rejection
+                body_size = abs(current_close - current_open) / (current_open + 0.0001)
+                upper_wick = (current_high - max(current_open, current_close)) / (current_high + 0.0001)
+                lower_wick = (min(current_open, current_close) - current_low) / (current_low + 0.0001)
+                
+                if trend_direction < 0:
+                    rejection_strength = upper_wick / (body_size + 0.001)
+                else:
+                    rejection_strength = lower_wick / (body_size + 0.001)
+                
+                df.loc[df.index[i], 'rejection_strength'] = rejection_strength
+                setups_found += 1
+        
+        print(f"✅ Found {setups_found} profitable trendline setups")
+        return df
+    
+    def calculate_all_indicators(self, df):
+        """Calculate optimized indicators"""
+        print("📊 Calculating optimized indicators...")
+        
+        df = self.calculate_trendline_features(df)
+        
+        # Optimized indicator set
+        df['rsi_14'] = momentum.RSIIndicator(df['close'], window=14).rsi()
+        df['volume_ma_ratio'] = df['volume'] / df['volume'].rolling(20).mean()
+        df['sma_20'] = trend.SMAIndicator(df['close'], window=20).sma_indicator()
+        df['ema_12'] = trend.EMAIndicator(df['close'], window=12).ema_indicator()
+        df['macd'] = trend.MACD(df['close']).macd()
+        df['bb_upper'] = volatility.BollingerBands(df['close']).bollinger_hband()
+        df['bb_lower'] = volatility.BollingerBands(df['close']).bollinger_lband()
+        
+        print("✅ Optimized indicators calculated")
+        return df
+
+def run_profitable_strategy():
+    """Run strategy optimized for profitability"""
+    print("💰 PROFITABLE STRATEGY - OPTIMIZED")
+    print("=" * 50)
+    
+    dm = DataManager()
+    data = dm.fetch_historical_data(limit=3000)  # More data for better stats
+    engine = ProfitableIndicatorEngine()
+    data = engine.calculate_all_indicators(data)
+    
+    balance = 1000
+    trades = []
+    
+    print("\n🎯 Running profitable backtest...")
+    
+    for i in range(50, len(data) - 5):
+        # OPTIMIZED ENTRY CONDITIONS FOR PROFITABILITY
+        is_touch = data['trendline_touch'].iloc[i] == 1
+        has_strong_rejection = data['rejection_strength'].iloc[i] > 0.8  # Higher threshold
+        good_volume = data['volume_ma_ratio'].iloc[i] > 1.0
+        rsi_good = 40 < data['rsi_14'].iloc[i] < 60  # Middle range only
+        
+        # Trend confirmation
+        if data['trendline_slope'].iloc[i] < 0:  # SHORT
+            trend_confirmation = data['close'].iloc[i] < data['sma_20'].iloc[i]  # Below SMA
+        else:  # LONG
+            trend_confirmation = data['close'].iloc[i] > data['sma_20'].iloc[i]  # Above SMA
+        
+        if is_touch and has_strong_rejection and good_volume and rsi_good and trend_confirmation:
+            entry_price = data['close'].iloc[i]
+            
+            # DYNAMIC EXIT STRATEGY
+            if data['trendline_slope'].iloc[i] < 0:  # SHORT
+                # For shorts, use tighter stops
+                stop_loss = entry_price * 1.008  # 0.8% stop loss
+                take_profit = entry_price * 0.992  # 0.8% take profit
+                signal_type = "SHORT"
+            else:  # LONG
+                # For longs, use tighter stops
+                stop_loss = entry_price * 0.992  # 0.8% stop loss
+                take_profit = entry_price * 1.008  # 0.8% take profit
+                signal_type = "LONG"
+            
+            # Find exit price
+            exit_price = None
+            exit_reason = ""
+            
+            for j in range(1, 8):  # Check next 7 minutes max
+                if i + j >= len(data):
+                    break
+                
+                current_price = data['close'].iloc[i+j]
+                
+                # Check stop loss
+                if (signal_type == "SHORT" and current_price >= stop_loss) or \
+                   (signal_type == "LONG" and current_price <= stop_loss):
+                    exit_price = current_price
+                    exit_reason = "STOP LOSS"
+                    break
+                
+                # Check take profit
+                if (signal_type == "SHORT" and current_price <= take_profit) or \
+                   (signal_type == "LONG" and current_price >= take_profit):
+                    exit_price = current_price
+                    exit_reason = "TAKE PROFIT"
+                    break
+            
+            # If no exit in 7 minutes, exit at current
+            if exit_price is None and i + 7 < len(data):
+                exit_price = data['close'].iloc[i+7]
+                exit_reason = "TIME EXIT"
+            elif exit_price is None:
+                exit_price = data['close'].iloc[-1]
+                exit_reason = "END OF DATA"
+            
+            # Calculate PnL
+            if signal_type == "SHORT":
+                pnl_percent = (entry_price - exit_price) / entry_price
+            else:
+                pnl_percent = (exit_price - entry_price) / entry_price
+            
+            # RISK MANAGEMENT: 1.5% position size (smaller for tighter stops)
+            pnl_amount = balance * 0.015 * pnl_percent
+            balance += pnl_amount
+            
+            trades.append({
+                'time': data.index[i],
+                'type': signal_type,
+                'entry': entry_price,
+                'exit': exit_price,
+                'rejection': data['rejection_strength'].iloc[i],
+                'pnl_percent': pnl_percent,
+                'balance': balance,
+                'reason': exit_reason
+            })
+            
+            pnl_color = "🟢" if pnl_percent > 0 else "🔴"
+            print(f"{pnl_color} {signal_type} at ${entry_price:.2f} - Rej: {data['rejection_strength'].iloc[i]:.2f} - PnL: {pnl_percent*100:+.2f}% - {exit_reason}")
+    
+    # Comprehensive profitability analysis
+    if trades:
+        trades_df = pd.DataFrame(trades)
+        winning_trades = trades_df[trades_df['pnl_percent'] > 0]
+        losing_trades = trades_df[trades_df['pnl_percent'] <= 0]
+        
+        win_rate = len(winning_trades) / len(trades_df) * 100
+        total_return = (balance - 1000) / 1000 * 100
+        
+        avg_win = winning_trades['pnl_percent'].mean() * 100 if len(winning_trades) > 0 else 0
+        avg_loss = losing_trades['pnl_percent'].mean() * 100 if len(losing_trades) > 0 else 0
+        profit_factor = abs(winning_trades['pnl_percent'].sum() / losing_trades['pnl_percent'].sum()) if losing_trades['pnl_percent'].sum() != 0 else float('inf')
+        
+        print(f"\n💰 PROFITABILITY ANALYSIS:")
+        print(f"Total Trades: {len(trades_df)}")
+        print(f"Winning Trades: {len(winning_trades)}")
+        print(f"Losing Trades: {len(losing_trades)}")
+        print(f"Win Rate: {win_rate:.1f}%")
+        print(f"Total Return: {total_return:+.2f}%")
+        print(f"Final Balance: ${balance:.2f}")
+        print(f"Average Win: {avg_win:+.2f}%")
+        print(f"Average Loss: {avg_loss:+.2f}%")
+        print(f"Profit Factor: {profit_factor:.2f}")
+        
+        # Exit reason analysis
+        exit_reasons = trades_df['reason'].value_counts()
+        print(f"\n📋 Exit Performance:")
+        for reason, count in exit_reasons.items():
+            reason_trades = trades_df[trades_df['reason'] == reason]
+            reason_win_rate = len(reason_trades[reason_trades['pnl_percent'] > 0]) / len(reason_trades) * 100
+            print(f"  {reason}: {count} trades, {reason_win_rate:.1f}% win rate")
+        
+        # Strategy assessment
+        if win_rate >= 55 and total_return >= 3.0:
+            assessment = "🎉 EXCELLENT - Highly profitable strategy!"
+            recommendation = "Ready for live trading with proper risk management"
+        elif win_rate >= 50 and total_return >= 1.0:
+            assessment = "✅ VERY GOOD - Profitable strategy"
+            recommendation = "Consider live trading with small amounts"
+        elif win_rate >= 45 and total_return >= 0:
+            assessment = "👍 PROMISING - Break-even to slightly profitable"
+            recommendation = "Continue testing and optimizing"
+        else:
+            assessment = "⚠️ NEEDS WORK - Not yet profitable"
+            recommendation = "Try different parameters or market conditions"
+        
+        print(f"\n{assessment}")
+        print(f"Recommendation: {recommendation}")
+        
+        return True, win_rate, total_return, len(trades_df)
+    else:
+        print("❌ No profitable trades found")
+        return False, 0, 0, 0
+
+def main():
+    print("🚀 LAUNCHING PROFITABLE STRATEGY OPTIMIZATION")
+    print("This version uses tighter stops, better filters, and optimized parameters")
+    print("=" * 60)
+    
+    success, win_rate, total_return, num_trades = run_profitable_strategy()
+    
+    if success and num_trades >= 8:
+        if win_rate >= 50 and total_return > 0:
+            print(f"\n💡 STRATEGY VALIDATED FOR LIVE TRADING!")
+            print(f"Performance: {num_trades} trades, {win_rate:.1f}% win rate, {total_return:+.2f}% return")
+            print("\n📝 LIVE TRADING RECOMMENDATIONS:")
+            print("1. Start with small amounts ($100-500)")
+            print("2. Use 1-2% position sizing")
+            print("3. Monitor performance closely")
+            print("4. Keep stop losses tight")
+            print("5. Trade during high volume periods")
+        else:
+            print(f"\n⚠️ Strategy needs more optimization")
+            print(f"Current: {win_rate:.1f}% win rate, {total_return:+.2f}% return")
+    else:
+        print(f"\n❌ Not enough data or trades for validation")
+
+if __name__ == "__main__":
+    main()

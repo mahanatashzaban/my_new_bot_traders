@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  ml-bot:
+    build: .
+    container_name: ml-forced-bot
+    restart: unless-stopped
+    command: python ml_forced_signals_bot.py
+    volumes:
+      - ./bot-logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  technical-bot:
+    build: .
+    container_name: technical-scalping-bot  
+    restart: unless-stopped
+    command: python technical_scalping_bot.py
+    volumes:
+      - ./bot-logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  realtime-bot:
+    build: .
+    container_name: realtime-monitoring-bot
+    restart: unless-stopped  
+    command: python realtime_monitoring_bot.py
+    volumes:
+      - ./bot-logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  highfreq-bot:
+    build: .
+    container_name: high-frequency-bot
+    restart: unless-stopped
+    command: python high_frequency_bot.py
+    volumes:
+      - ./bot-logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1

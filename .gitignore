@@ -1,0 +1,22 @@
+# Virtual environment
+bot-env/
+
+# Logs and cache
+bot-logs/
+logs/
+__pycache__/
+*.pyc
+*.log
+
+# Temporary files
+pids/
+*.tmp
+*.csv
+*.json
+
+# Downloaded packages
+ta-lib-0.4.0-src.tar.gz*
+
+# Large binary files
+*.so
+*.dll
